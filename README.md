@@ -7,8 +7,15 @@ A minimal Chrome extension that blocks configured sites during specified time wi
 ```bash
 npm i
 npm run build
-# Load dist/ at chrome://extensions (Developer mode → Load unpacked)
 ```
+
+### Adding to Chrome
+
+1. Open Chrome and navigate to `chrome://extensions`
+2. Enable **Developer mode** by toggling the switch in the top-right corner
+3. Click **Load unpacked**
+4. Select the `dist/` folder from this project
+5. The extension should now appear in your extensions list and be active
 
 ## Notes
 
