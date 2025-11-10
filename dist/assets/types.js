@@ -1,0 +1,2 @@
+const t={blockedHosts:["tiktok.com","netflix.com","facebook.com","instagram.com","youtube.com","twitter.com"],windows:[{day:1,start:"09:00",end:"17:00"},{day:2,start:"09:00",end:"17:00"},{day:3,start:"09:00",end:"17:00"},{day:4,start:"09:00",end:"17:00"},{day:5,start:"09:00",end:"17:00"}],enabled:!0,domainDurations:{"tiktok.com":[10],"netflix.com":[10],"facebook.com":[10],"instagram.com":[10],"youtube.com":[10],"twitter.com":[10]},rerollResetMinutes:60};export{t as D};
+//# sourceMappingURL=types.js.map

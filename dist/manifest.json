@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Productivity Blocker",
+  "version": "0.1.0",
+  "description": "Block distracting sites during scheduled times.",
+  "icons": {
+    "16": "icon-16.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
+  "permissions": [
+    "storage",
+    "alarms",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Productivity Blocker"
+  },
+  "options_page": "options/index.html",
+  "declarative_net_request": {
+    "rule_resources": []
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "cardPopup/index.html"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
