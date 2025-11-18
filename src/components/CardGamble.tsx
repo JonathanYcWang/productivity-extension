@@ -1,6 +1,6 @@
 import React from "react";
 import "../styles/CardGamble.css";
-import { TemporaryUnblock } from "../types";
+import { TemporaryUnblock, Settings } from "../types";
 import { storage, runtime } from "../lib/browser-api";
 
 interface CardGambleProps {
@@ -92,6 +92,7 @@ const REROLL_STATE_KEY = "cardGambleRerollState";
 interface RerollState {
   availableRerolls: number; // Track available rerolls directly (can exceed initial)
   rerollResetTime: number | null;
+  rerollResetTimePaused: number | null; // Remaining time when paused
   lastCardGeneration: number; // timestamp when cards were last generated
   cards: CardOption[]; // Current cards displayed
   selectedCard: number | null; // Which card is selected
@@ -101,8 +102,15 @@ interface RerollState {
   selectedCardExpiresAt: number | null; // When the selected domain card expires
 }
 
-const DEFAULT_REROLL_RESET_MINUTES = 60;
-const INITIAL_REROLLS = 5; // Starting number of rerolls
+const MIN_REROLL_RESET_MINUTES = 30;
+const MAX_REROLL_RESET_MINUTES = 60;
+const INITIAL_REROLLS = 3; // Starting number of rerolls
+
+// Generate random reset time between MIN and MAX minutes
+function generateRandomResetTime(): number {
+  const minutes = Math.floor(Math.random() * (MAX_REROLL_RESET_MINUTES - MIN_REROLL_RESET_MINUTES + 1)) + MIN_REROLL_RESET_MINUTES;
+  return Date.now() + (minutes * 60 * 1000);
+}
 
 export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGambleProps) {
   const [cards, setCards] = React.useState<CardOption[]>([]);
@@ -111,6 +119,7 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
   const [animationKey, setAnimationKey] = React.useState(0);
   const [availableRerolls, setAvailableRerolls] = React.useState(INITIAL_REROLLS);
   const [rerollResetTime, setRerollResetTime] = React.useState<number | null>(null);
+  const [rerollResetTimePaused, setRerollResetTimePaused] = React.useState<number | null>(null); // Remaining time when paused
   const [timeRemaining, setTimeRemaining] = React.useState<number>(0);
   const [isLoadingState, setIsLoadingState] = React.useState(true);
   const [cardsLocked, setCardsLocked] = React.useState(false);
@@ -118,6 +127,54 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
   const [unblockTimeRemaining, setUnblockTimeRemaining] = React.useState<number>(0);
   const [canceledCardIndex, setCanceledCardIndex] = React.useState<number | null>(null);
   const [cardAnimationKeys, setCardAnimationKeys] = React.useState<number[]>([0, 0, 0]); // Per-card animation keys
+  const [isFocusTimeActive, setIsFocusTimeActive] = React.useState(false);
+
+  // Check focus time status
+  React.useEffect(() => {
+    const checkFocusTime = async () => {
+      try {
+        const { settings } = await storage.sync.get('settings');
+        if (settings) {
+          const mode = settings.mode || 'scheduled';
+          // Focus time is active if mode is 'focus' and either:
+          // - focusTimeEnd is set (timer is running)
+          // - focusTimePaused is set (timer is paused but was active)
+          const isActive = mode === 'focus' && 
+            (settings.focusTimeEnd || (settings.focusTimePaused && settings.focusTimePaused > 0));
+          setIsFocusTimeActive(isActive);
+        }
+      } catch (error) {
+        console.error('Error checking focus time:', error);
+      }
+    };
+    
+    checkFocusTime();
+    
+    // Listen for storage changes to detect focus time start
+    if (storage.onChanged) {
+      const listener = (changes: any, area: string) => {
+        if (area === "sync" && changes.settings) {
+          const newSettings = changes.settings.newValue;
+          if (newSettings) {
+            const mode = newSettings.mode || 'scheduled';
+            // Focus time is active if mode is 'focus' and either:
+            // - focusTimeEnd is set (timer is running)
+            // - focusTimePaused is set (timer is paused but was active)
+            const isActive = mode === 'focus' && 
+              (newSettings.focusTimeEnd || (newSettings.focusTimePaused && newSettings.focusTimePaused > 0));
+            setIsFocusTimeActive(isActive);
+          }
+        }
+      };
+      
+      storage.onChanged.addListener(listener);
+      return () => {
+        if (storage.onChanged && 'removeListener' in storage.onChanged) {
+          (storage.onChanged as any).removeListener(listener);
+        }
+      };
+    }
+  }, []);
 
   // Load persisted reroll state
   React.useEffect(() => {
@@ -141,6 +198,7 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
             // Load persisted state
             setAvailableRerolls(rerollState.availableRerolls ?? INITIAL_REROLLS);
             setRerollResetTime(rerollState.rerollResetTime);
+            setRerollResetTimePaused(rerollState.rerollResetTimePaused ?? null);
             
             // Load card state if it exists
             if (rerollState.cards && rerollState.cards.length > 0) {
@@ -193,6 +251,48 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
               }
             }
           }
+        } else {
+          // No persisted state - check if focus time is active before initializing timer
+          const checkAndInitialize = async () => {
+            try {
+              const { settings } = await storage.sync.get('settings');
+              const mode = settings?.mode || 'scheduled';
+              // Focus time is active if mode is 'focus' and either:
+              // - focusTimeEnd is set (timer is running)
+              // - focusTimePaused is set (timer is paused but was active)
+              const focusActive = mode === 'focus' && 
+                (settings?.focusTimeEnd || (settings?.focusTimePaused && settings.focusTimePaused > 0));
+              
+              if (focusActive) {
+                // Focus time is active - start timer
+                const initialResetTime = generateRandomResetTime();
+                setRerollResetTime(initialResetTime);
+                setAvailableRerolls(INITIAL_REROLLS);
+                setCardsLocked(true); // Lock cards until timer expires
+                setShowCards(false); // Don't show cards initially
+                
+                // Notify background script to schedule the alarm
+                try {
+                  await runtime.sendMessage({
+                    action: 'scheduleRerollReset',
+                    resetTime: initialResetTime
+                  });
+                } catch (error) {
+                  console.error('Error scheduling initial reroll reset:', error);
+                }
+              } else {
+                // Focus time not active - keep cards locked, no timer
+                setAvailableRerolls(INITIAL_REROLLS);
+                setCardsLocked(true);
+                setShowCards(false);
+                setRerollResetTime(null);
+              }
+            } catch (error) {
+              console.error('Error checking focus time for initialization:', error);
+            }
+          };
+          
+          checkAndInitialize();
         }
       } catch (error) {
         console.error('Error loading reroll state:', error);
@@ -213,6 +313,7 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
         const state: RerollState = {
           availableRerolls,
           rerollResetTime,
+          rerollResetTimePaused,
           lastCardGeneration: Date.now(),
           cards,
           selectedCard,
@@ -228,7 +329,7 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
     };
     
     saveRerollState();
-  }, [availableRerolls, rerollResetTime, cards, selectedCard, cardsLocked, showCards, animationKey, selectedCardExpiresAt, isLoadingState]);
+  }, [availableRerolls, rerollResetTime, rerollResetTimePaused, cards, selectedCard, cardsLocked, showCards, animationKey, selectedCardExpiresAt, isLoadingState]);
 
   // Reset all state when resetKey changes
   React.useEffect(() => {
@@ -243,13 +344,14 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
       setTimeRemaining(0);
       setSelectedCardExpiresAt(null);
       setCanceledCardIndex(null);
+      setRerollResetTimePaused(null);
       
       // Clear persisted state
-      await chrome.storage.local.remove(REROLL_STATE_KEY);
+      await storage.local.remove(REROLL_STATE_KEY);
       
       // Cancel any scheduled alarms
       try {
-        chrome.runtime.sendMessage({
+        runtime.sendMessage({
           action: 'cancelRerollReset'
         });
       } catch (error) {
@@ -274,33 +376,91 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
     resetAll();
   }, [resetKey]); // Only reset when resetKey changes, not when domains change
 
-  // Initialize cards when component mounts or domains change (only if no persisted cards exist)
+  // Note: Cards are now generated in the timer countdown effect when timer expires
+  // This effect is kept for backward compatibility but cards should be generated by timer expiration
+
+  // Start timer when focus time becomes active (only on initial start)
+  // Timer also starts when card expires/cancels (handled by resumeRerollTimer)
   React.useEffect(() => {
-    if (domains.length > 0 && !isLoadingState && cards.length === 0) {
-      const initialCards = Array.from({ length: 3 }, () => 
-        generateRandomOption(domains, domainDurations)
-      );
-      setCards(initialCards);
-      setCardAnimationKeys([0, 0, 0]); // Initialize per-card animation keys
-      setSelectedCard(null);
-      // Cards lock state is managed separately - don't change it here
-      // Cards will be locked if a card was selected and timer is running
-      setShowCards(false);
-      // Trigger animation by resetting key and showing cards
-      setAnimationKey(prev => prev + 1);
-      // Small delay to ensure DOM is ready for animation
-      setTimeout(() => {
-        setShowCards(true);
-      }, 50);
+    if (isFocusTimeActive && !rerollResetTime && !selectedCardExpiresAt && !isLoadingState) {
+      // Start timer on initial focus time start
+      // Only skip if timer just expired (cards exist and are unlocked - waiting for selection)
+      // Check if cards exist and are unlocked - clear sign timer just expired
+      const timerJustExpired = !cardsLocked && cards.length > 0;
+      if (!timerJustExpired) {
+        // Focus time just started - start the initial timer
+        const initialResetTime = generateRandomResetTime();
+        setRerollResetTime(initialResetTime);
+        setCardsLocked(true); // Lock cards until timer expires
+        setShowCards(false);
+        setCards([]); // Clear any existing cards
+        setAvailableRerolls(INITIAL_REROLLS);
+        
+        // Notify background script to schedule the alarm
+        runtime.sendMessage({
+          action: 'scheduleRerollReset',
+          resetTime: initialResetTime
+        }).catch(error => {
+          console.error('Error scheduling reroll reset:', error);
+        });
+      }
+      // If cards exist and are unlocked (timer just expired), don't start timer - wait for selection
+    } else if (!isFocusTimeActive) {
+      // Focus time stopped - clear timer and lock cards
+      if (rerollResetTime && !selectedCardExpiresAt) {
+        setRerollResetTime(null);
+        setRerollResetTimePaused(null);
+        
+        // Cancel the scheduled alarm
+        runtime.sendMessage({
+          action: 'cancelRerollReset'
+        }).catch(error => {
+          console.error('Error canceling reroll reset:', error);
+        });
+      }
+      // Always lock cards and clear them when focus time is not active (unless a card is selected)
+      if (selectedCard === null) {
+        setCardsLocked(true);
+        setShowCards(false);
+        setCards([]);
+        setTimeRemaining(0);
+      }
     }
-  }, [domains, domainDurations, isLoadingState, cards.length]);
+  }, [isFocusTimeActive, rerollResetTime, selectedCardExpiresAt, isLoadingState, cardsLocked, cards.length, selectedCard]);
 
   // Timer countdown effect
   React.useEffect(() => {
-    if (!rerollResetTime) {
+    // Don't run timer if focus time is not active
+    if (!isFocusTimeActive) {
       setTimeRemaining(0);
+      // Keep cards locked if focus time is not active
+      if (!rerollResetTime) {
+        setCardsLocked(true);
+      }
       return;
     }
+    
+    // If a card is selected and timer is active, pause the re-roll timer
+    if (selectedCardExpiresAt && selectedCard !== null) {
+      // Timer is paused - don't show timer while card is active
+      setTimeRemaining(0);
+      return; // Don't run countdown while card timer is active
+    }
+
+    // If no timer is running and cards are unlocked, stop the timer display
+    if (!rerollResetTime) {
+      setTimeRemaining(0);
+      // Only lock cards if they're not already unlocked (i.e., waiting for initial timer to start)
+      // Don't lock cards if timer expired and cards should be selectable
+      if (cardsLocked && cards.length === 0) {
+        // Waiting for initial timer to start
+        setCardsLocked(true);
+      }
+      return;
+    }
+
+    // Timer is active - keep cards locked while timer is running
+    setCardsLocked(true);
 
     const updateTimer = () => {
       const now = Date.now();
@@ -308,19 +468,52 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
       setTimeRemaining(remaining);
 
       if (remaining === 0) {
-        // Reset re-rolls when timer expires
+        // Timer expired - unlock cards and generate them, stop the timer
         setAvailableRerolls(INITIAL_REROLLS);
         setRerollResetTime(null);
-        setCardsLocked(false); // Unlock cards when timer resets
+        setRerollResetTimePaused(null);
+        setTimeRemaining(0); // Explicitly set to 0 to stop timer display
+        setCardsLocked(false); // Unlock cards when timer expires
         setSelectedCard(null); // Clear selection - reset all cards
         setSelectedCardExpiresAt(null);
         setCanceledCardIndex(null);
-        // Regenerate cards for new round
+        
+        // Pause focus timer when cards become selectable
+        const pauseFocusTimerForCardSelection = async () => {
+          try {
+            const { settings } = await storage.sync.get('settings');
+            if (settings && settings.mode === 'focus' && settings.focusTimeEnd) {
+              const now = Date.now();
+              const remaining = Math.max(0, settings.focusTimeEnd - now);
+              if (remaining > 0) {
+                // Pause focus timer by storing remaining time
+                await storage.sync.set({
+                  settings: {
+                    ...settings,
+                    focusTimePaused: remaining,
+                    focusTimeEnd: undefined // Clear end time to pause
+                  }
+                });
+              }
+            }
+          } catch (error) {
+            console.error('Error pausing focus timer for card selection:', error);
+          }
+        };
+        pauseFocusTimerForCardSelection();
+        
+        // Switch to options page when cards become selectable
+        runtime.openOptionsPage().catch(error => {
+          console.error('Error opening options page:', error);
+        });
+        
+        // Generate cards for new round (or initial cards if none exist)
         if (domains.length > 0) {
           const newCards = Array.from({ length: 3 }, () => 
             generateRandomOption(domains, domainDurations)
           );
           setCards(newCards);
+          setCardAnimationKeys([0, 0, 0]); // Reset per-card animation keys
           setAnimationKey(prev => prev + 1);
           setShowCards(false);
           setTimeout(() => {
@@ -336,7 +529,7 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
     const interval = setInterval(updateTimer, 1000);
 
     return () => clearInterval(interval);
-  }, [rerollResetTime, availableRerolls, domains, domainDurations]);
+  }, [isFocusTimeActive, rerollResetTime, rerollResetTimePaused, selectedCardExpiresAt, selectedCard, availableRerolls, domains, domainDurations, cardsLocked, cards.length]);
 
   const rerollCard = (cardIndex: number) => {
     // Check if user has any available rerolls
@@ -383,31 +576,59 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
       return;
     }
     
-    // For domain cards, lock cards, reset rerolls, and start timer
+    // For domain cards, lock cards, reset rerolls, and pause/clear any existing timer
     setSelectedCard(cardIndex);
     setCardsLocked(true); // Lock all cards after selection
     setAvailableRerolls(0); // Lose all rerolls when a domain card is selected
     
-    // Start timer when a domain card is selected (full duration)
-    if (!rerollResetTime) {
-      const resetTime = Date.now() + DEFAULT_REROLL_RESET_MINUTES * 60 * 1000;
-      setRerollResetTime(resetTime);
-      
-      // Notify background script to schedule the alarm
-      try {
-        chrome.runtime.sendMessage({
-          action: 'scheduleRerollReset',
-          resetTime: resetTime
-        });
-      } catch (error) {
-        console.error('Error scheduling reroll reset:', error);
+    // Pause re-roll timer if it's running - don't start a new one
+    // Timer will only start after the selected card's timer finishes
+    if (rerollResetTime) {
+      const now = Date.now();
+      const remaining = Math.max(0, rerollResetTime - now);
+      if (remaining > 0) {
+        setRerollResetTimePaused(remaining);
+        setRerollResetTime(null); // Clear active timer to pause it
+        
+        // Cancel the scheduled alarm
+        try {
+          await runtime.sendMessage({
+            action: 'cancelRerollReset'
+          });
+        } catch (error) {
+          console.error('Error canceling reroll reset:', error);
+        }
       }
+    } else {
+      // Clear any paused timer - timer will start fresh after card expires
+      setRerollResetTimePaused(null);
     }
     
     if (card.type === 'domain' && card.domain && card.durationMinutes) {
       // Domain card - unblock the domain
       const expiresAt = Date.now() + (card.durationMinutes * 60 * 1000);
       setSelectedCardExpiresAt(expiresAt);
+      
+      // Pause focus timer if it's active
+      try {
+        const { settings } = await storage.sync.get('settings');
+        if (settings && settings.mode === 'focus' && settings.focusTimeEnd) {
+          const now = Date.now();
+          const remaining = Math.max(0, settings.focusTimeEnd - now);
+          if (remaining > 0) {
+            // Pause focus timer by storing remaining time
+            await storage.sync.set({
+              settings: {
+                ...settings,
+                focusTimePaused: remaining,
+                focusTimeEnd: undefined // Clear end time to pause
+              }
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error pausing focus timer:', error);
+      }
       
       // Send message to background script to temporarily unblock this domain
       try {
@@ -443,7 +664,11 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
         setCanceledCardIndex(canceledIndex);
         setSelectedCard(null);
         setSelectedCardExpiresAt(null);
-        setCardsLocked(false); // Unlock cards so user can select again
+        
+        // Resume focus timer if it was paused
+        resumeFocusTimer();
+        // Start new next selection timer (this will lock cards, clear them, and start countdown)
+        resumeRerollTimer();
       }
     };
 
@@ -476,6 +701,66 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
+  // Resume focus timer if it was paused
+  const resumeFocusTimer = async () => {
+    try {
+      const { settings } = await storage.sync.get('settings');
+      if (settings && settings.mode === 'focus' && settings.focusTimePaused) {
+        const now = Date.now();
+        const newEndTime = now + settings.focusTimePaused;
+        await storage.sync.set({
+          settings: {
+            ...settings,
+            focusTimeEnd: newEndTime,
+            focusTimePaused: undefined // Clear paused state
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Error resuming focus timer:', error);
+    }
+  };
+
+  // Resume re-roll timer if it was paused, or start a new one if no timer was paused
+  // This locks cards, clears them, and starts the next selection timer
+  const resumeRerollTimer = () => {
+    // Lock cards and clear them - new timer is starting
+    setCardsLocked(true);
+    setShowCards(false);
+    setCards([]);
+    setAvailableRerolls(INITIAL_REROLLS);
+    setCanceledCardIndex(null);
+    
+    if (rerollResetTimePaused !== null && rerollResetTimePaused > 0) {
+      // Resume the paused timer
+      const now = Date.now();
+      const newResetTime = now + rerollResetTimePaused;
+      setRerollResetTime(newResetTime);
+      setRerollResetTimePaused(null);
+      
+      // Notify background script to schedule the alarm
+      runtime.sendMessage({
+        action: 'scheduleRerollReset',
+        resetTime: newResetTime
+      }).catch(error => {
+        console.error('Error scheduling reroll reset:', error);
+      });
+    } else {
+      // No paused timer - start a new one after card expires
+      const newResetTime = generateRandomResetTime();
+      setRerollResetTime(newResetTime);
+      setRerollResetTimePaused(null);
+      
+      // Notify background script to schedule the alarm
+      runtime.sendMessage({
+        action: 'scheduleRerollReset',
+        resetTime: newResetTime
+      }).catch(error => {
+        console.error('Error scheduling reroll reset:', error);
+      });
+    }
+  };
+
   // Handle canceling the selected card's unblock
   const handleCancelUnblock = async () => {
     if (selectedCard === null) return;
@@ -498,7 +783,11 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
       setCanceledCardIndex(canceledIndex);
       setSelectedCard(null);
       setSelectedCardExpiresAt(null);
-      // Keep cards locked so all cards remain disabled (like when a card is selected)
+      
+      // Resume focus timer if it was paused
+      resumeFocusTimer();
+      // Start new next selection timer (this will lock cards, clear them, and start countdown)
+      resumeRerollTimer();
     } catch (error) {
       console.error('Error canceling unblock:', error);
     }
@@ -519,27 +808,40 @@ export function CardGamble({ domains, domainDurations = {}, resetKey }: CardGamb
       </p>
       
       <div className="reroll-counter-container">
-        {availableRerolls > 0 && (
+        {availableRerolls > 0 && !cardsLocked && (
           <div className="reroll-counter">
             <span className="reroll-counter-label">Re-roll{availableRerolls !== 1 ? 's' : ''} available:</span>
             <span className="reroll-counter-value">{availableRerolls}</span>
           </div>
         )}
-        {availableRerolls === 0 && timeRemaining > 0 && (
+        {(timeRemaining > 0 && (cardsLocked || cards.length === 0)) && (
           <div className="reroll-timer">
             Next selection in: <span className="timer-value">{formatTimeRemaining(timeRemaining)}</span>
           </div>
         )}
       </div>
 
-      <div className="cards-wrapper">
+      <div className={`cards-wrapper ${(cardsLocked && selectedCard === null) || !isFocusTimeActive ? 'disabled' : ''} ${cards.length > 0 ? 'has-cards' : ''} ${selectedCard !== null ? 'card-selected' : ''}`}>
+        {cards.length === 0 && cardsLocked && !isFocusTimeActive && (
+          <div style={{ textAlign: 'center', padding: '40px', color: '#666', width: '100%' }}>
+            <p>No selection available</p>
+            <p>Start focus time to begin</p>
+          </div>
+        )}
+        {/* Only show "No selection available" when next selection timer is running (no card selected) */}
+        {cards.length === 0 && cardsLocked && isFocusTimeActive && timeRemaining > 0 && selectedCard === null && !selectedCardExpiresAt && (
+          <div style={{ textAlign: 'center', padding: '40px', color: '#666', width: '100%' }}>
+            <p>No selection available</p>
+            <p>Next selection in: <strong>{formatTimeRemaining(timeRemaining)}</strong></p>
+          </div>
+        )}
         {cards.map((card, index) => (
           <div key={`card-wrapper-${animationKey}-${index}`} className="card-wrapper">
             <div
               key={`${animationKey}-${index}-${cardAnimationKeys[index] || 0}`}
-              className={`gamble-card ${showCards || cardAnimationKeys[index] > 0 ? 'card-drop' : ''} ${selectedCard === index && canceledCardIndex !== index ? 'card-clicked' : ''} ${canceledCardIndex === index || (selectedCard !== index && (cardsLocked || canceledCardIndex !== null)) ? 'card-disabled' : ''} ${selectedCard === null && !cardsLocked && canceledCardIndex === null ? 'card-clickable' : ''}`}
+              className={`gamble-card ${showCards || cardAnimationKeys[index] > 0 ? 'card-drop' : ''} ${selectedCard === index && canceledCardIndex !== index ? 'card-clicked' : ''} ${canceledCardIndex === index || (selectedCard !== index && (cardsLocked || canceledCardIndex !== null || !isFocusTimeActive)) ? 'card-disabled' : ''} ${selectedCard === null && !cardsLocked && canceledCardIndex === null && isFocusTimeActive ? 'card-clickable' : ''}`}
               style={{ animationDelay: `${index * 0.2}s` }}
-              onClick={() => selectedCard === null && !cardsLocked && canceledCardIndex === null && selectCard(index)}
+              onClick={() => selectedCard === null && !cardsLocked && canceledCardIndex === null && isFocusTimeActive && selectCard(index)}
             >
               {selectedCard === index && canceledCardIndex !== index && (
                 <div className="card-selected-banner">

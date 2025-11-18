@@ -11,6 +11,10 @@ export type Settings = {
   enabled: boolean;           // global toggle
   domainDurations?: Record<string, number[]>; // durations in minutes for each domain
   rerollResetMinutes?: number; // minutes until re-rolls reset (default: 60)
+  mode?: 'scheduled' | 'focus'; // 'scheduled' for working hours, 'focus' for focus timer
+  focusTimeHours?: number;     // hours for focus timer
+  focusTimeEnd?: number;       // timestamp when focus time ends (milliseconds)
+  focusTimePaused?: number;    // remaining milliseconds when paused (for card timer)
 };
 
 export type TemporaryUnblock = {
@@ -37,13 +41,15 @@ export const DEFAULT_SETTINGS: Settings = {
   ],
   enabled: true,
   domainDurations: {
-    "tiktok.com": [10],
-    "netflix.com": [10],
-    "facebook.com": [10],
-    "instagram.com": [10],
-    "youtube.com": [10],
-    "twitter.com": [10],
-    "primevideo.com": [10]
+    "tiktok.com": [10, 15, 20, 25, 30],
+    "netflix.com": [10, 15, 20, 25, 30],
+    "facebook.com": [10, 15, 20, 25, 30],
+    "instagram.com": [10, 15, 20, 25, 30],
+    "youtube.com": [10, 15, 20, 25, 30],
+    "twitter.com": [10, 15, 20, 25, 30],
+    "primevideo.com": [10, 15, 20, 25, 30]
   },
-  rerollResetMinutes: 60
+  rerollResetMinutes: 60,
+  mode: 'focus',
+  focusTimeHours: 2
 };

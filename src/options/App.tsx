@@ -8,6 +8,7 @@ import { BlockedSitesSection } from "../components/BlockedSitesSection";
 import { TimeWindowsSection } from "../components/TimeWindowsSection";
 import { MasterSwitchSection } from "../components/MasterSwitchSection";
 import { ResetSection } from "../components/ResetSection";
+import { FocusTimerSection } from "../components/FocusTimerSection";
 import { storage, runtime } from "../lib/browser-api";
 
 const STORAGE_KEY = "settings";
@@ -17,10 +18,31 @@ function Options() {
   const [cardGambleResetKey, setCardGambleResetKey] = React.useState(0);
 
   React.useEffect(() => {
-    (async () => {
+    const loadSettings = async () => {
       const { [STORAGE_KEY]: s } = await storage.sync.get(STORAGE_KEY);
       setSettings({ ...DEFAULT_SETTINGS, ...(s || {}) });
-    })();
+    };
+    
+    loadSettings();
+    
+    // Listen for storage changes (e.g., when CardGamble pauses focus timer)
+    if (storage.onChanged) {
+      const listener = (changes: any, area: string) => {
+        if (area === "sync" && changes[STORAGE_KEY]) {
+          const newSettings = changes[STORAGE_KEY].newValue;
+          if (newSettings) {
+            setSettings({ ...DEFAULT_SETTINGS, ...newSettings });
+          }
+        }
+      };
+      
+      storage.onChanged.addListener(listener);
+      return () => {
+        if (storage.onChanged && 'removeListener' in storage.onChanged) {
+          (storage.onChanged as any).removeListener(listener);
+        }
+      };
+    }
   }, []);
 
   const save = async (next: Settings) => {
@@ -42,6 +64,7 @@ function Options() {
 
   return (
     <div className="p">
+      <FocusTimerSection settings={settings} onSave={save} />
       <h1>Blocker Options</h1>
 
       {settings.blockedHosts.length > 0 && (

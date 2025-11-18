@@ -184,23 +184,49 @@ async function updateBlockingAndAlarm() {
   try {
     const settings = await getSettings();
     const now = new Date();
+    const mode = settings.mode || 'scheduled';
 
-    const shouldBlock = settings.enabled && isWithinAnyWindow(now, settings.windows);
+    let shouldBlock = false;
+    let nextAlarmTime: Date;
+
+    if (mode === 'focus') {
+      // Focus time mode: check if current time is before focusTimeEnd
+      // If paused (focusTimePaused exists), don't block
+      if (settings.focusTimePaused) {
+        // Focus timer is paused (card timer is active)
+        shouldBlock = false;
+        nextAlarmTime = new Date(now.getTime() + 60 * 1000); // Check every minute
+      } else if (settings.focusTimeEnd) {
+        const nowMs = now.getTime();
+        shouldBlock = settings.enabled && nowMs < settings.focusTimeEnd;
+        nextAlarmTime = new Date(Math.min(settings.focusTimeEnd, nowMs + 24 * 60 * 60 * 1000));
+      } else {
+        // No active focus time
+        shouldBlock = false;
+        nextAlarmTime = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      }
+    } else {
+      // Scheduled mode: use existing window logic
+      shouldBlock = settings.enabled && isWithinAnyWindow(now, settings.windows);
+      nextAlarmTime = nextBoundaryAfter(now, settings.windows);
+    }
+
     debugLog('updateBlockingAndAlarm:', {
+      mode,
       enabled: settings.enabled,
       shouldBlock,
       blockedHosts: settings.blockedHosts,
       windows: settings.windows,
+      focusTimeEnd: settings.focusTimeEnd ? new Date(settings.focusTimeEnd).toISOString() : undefined,
       currentTime: now.toISOString()
     });
     
     await setBlockingEnabled(shouldBlock, settings.blockedHosts);
 
-    // Schedule the next boundary (start or end of a window)
-    const next = nextBoundaryAfter(now, settings.windows);
+    // Schedule the next boundary
     await alarms.clear(ALARM_KEY);
-    await alarms.create(ALARM_KEY, { when: next.getTime() });
-    debugLog('Next boundary scheduled for:', new Date(next.getTime()).toISOString());
+    await alarms.create(ALARM_KEY, { when: nextAlarmTime.getTime() });
+    debugLog('Next boundary scheduled for:', new Date(nextAlarmTime.getTime()).toISOString());
   } catch (error) {
     console.error('Error updating blocking and alarm:', error);
   }
@@ -275,7 +301,24 @@ if (tabs.onUpdated) {
   
   try {
     const settings = await getSettings();
-    const shouldBlock = settings.enabled && isWithinAnyWindow(new Date(), settings.windows);
+    const mode = settings.mode || 'scheduled';
+    const now = new Date();
+    
+    let shouldBlock = false;
+    if (mode === 'focus') {
+      // Focus time mode: check if current time is before focusTimeEnd
+      // If paused (focusTimePaused exists), don't block
+      if (settings.focusTimePaused) {
+        // Focus timer is paused (card timer is active)
+        shouldBlock = false;
+      } else if (settings.focusTimeEnd) {
+        const nowMs = now.getTime();
+        shouldBlock = settings.enabled && nowMs < settings.focusTimeEnd;
+      }
+    } else {
+      // Scheduled mode: use existing window logic
+      shouldBlock = settings.enabled && isWithinAnyWindow(now, settings.windows);
+    }
     
     if (shouldBlock && settings.blockedHosts.length > 0) {
       if (isBlockedUrl(tab.url, settings.blockedHosts)) {

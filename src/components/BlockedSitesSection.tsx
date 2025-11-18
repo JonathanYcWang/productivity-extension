@@ -33,15 +33,18 @@ export function BlockedSitesSection({ settings, onSave }: BlockedSitesSectionPro
     
     if (isDuplicate) return;
     
-    // Automatically add 10 minute duration for new domains
+    // Automatically add default durations (10, 15, 20, 25, 30 min) for new domains
     const newDurations = { ...(settings.domainDurations || {}) };
     if (!newDurations[h]) {
       newDurations[h] = [];
     }
-    // Add default duration (10 min) if it doesn't already exist
-    if (!newDurations[h].includes(10)) {
-      newDurations[h].push(10);
-    }
+    // Add default durations if they don't already exist
+    const defaultDurations = [10, 15, 20, 25, 30];
+    defaultDurations.forEach(duration => {
+      if (!newDurations[h].includes(duration)) {
+        newDurations[h].push(duration);
+      }
+    });
     // Sort durations for better UX
     newDurations[h].sort((a, b) => a - b);
     
