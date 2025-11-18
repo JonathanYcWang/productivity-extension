@@ -1,5 +1,6 @@
 import React from "react";
 import { DEFAULT_SETTINGS } from "../types";
+import { storage } from "../lib/browser-api";
 
 interface ResetSectionProps {
   onReset: () => Promise<void>;
@@ -8,7 +9,7 @@ interface ResetSectionProps {
 export function ResetSection({ onReset }: ResetSectionProps) {
   const resetToDefaults = async () => {
     if (confirm('Reset all settings to defaults? This cannot be undone.')) {
-      await chrome.storage.sync.remove("settings");
+      await storage.sync.remove("settings");
       await onReset();
     }
   };

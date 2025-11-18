@@ -90,6 +90,7 @@ export default defineConfig({
           return "assets/[name].js";
         },
         chunkFileNames: "assets/[name].js",
+        format: "es", // Keep ES modules for Safari compatibility
         assetFileNames: (assetInfo) => {
           // Keep HTML files in their respective directories
           if (assetInfo.name && assetInfo.name.includes("popup")) {

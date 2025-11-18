@@ -1,4 +1,5 @@
 // Content script to inject card popup on pages
+import { runtime } from "../lib/browser-api";
 
 const POPUP_ID = 'productivity-blocker-card-popup';
 
@@ -40,7 +41,7 @@ export function showCardPopup() {
   `;
   
   // Get the extension URL for the popup HTML
-  const popupUrl = chrome.runtime.getURL('cardPopup/index.html');
+  const popupUrl = runtime.getURL('cardPopup/index.html');
   iframe.src = popupUrl;
   
   popup.appendChild(iframe);
@@ -57,18 +58,21 @@ export function showCardPopup() {
 
   // Listen for close messages from iframe
   window.addEventListener('message', (event) => {
-    if (event.data === 'closeCardPopup' && event.origin === chrome.runtime.getURL('').slice(0, -1)) {
+    const extensionOrigin = runtime.getURL('').slice(0, -1);
+    if (event.data === 'closeCardPopup' && event.origin === extensionOrigin) {
       popup.remove();
     }
   });
 }
 
 // Listen for messages from background script
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'showCardPopup') {
-    showCardPopup();
-    sendResponse({ success: true });
-  }
-  return true;
-});
+if (runtime.onMessage) {
+  runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
+    if (message.action === 'showCardPopup') {
+      showCardPopup();
+      sendResponse({ success: true });
+    }
+    return true;
+  });
+}
 

@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, Settings, TemporaryUnblock } from "../types";
 import { isWithinAnyWindow, nextBoundaryAfter } from "../lib/schedule";
+import { storage, alarms, tabs, runtime, scripting, action } from "../lib/browser-api";
 
 const STORAGE_KEY = "settings";
 const TEMP_UNBLOCKS_KEY = "temporaryUnblocks";
@@ -13,12 +14,28 @@ const DEBUG = true;
 
 function debugLog(...args: any[]) {
   if (DEBUG) {
-    console.log('[Productivity Blocker]', ...args);
+    try {
+      console.log('[Productivity Blocker]', ...args);
+    } catch (error) {
+      // Fallback if console.log fails
+      try {
+        console.error('[Productivity Blocker]', ...args);
+      } catch (e) {
+        // Ignore if console is completely unavailable
+      }
+    }
   }
 }
 
+// Log extension initialization
+try {
+  debugLog('Background script loaded');
+} catch (error) {
+  console.error('Error during background script initialization:', error);
+}
+
 async function getSettings(): Promise<Settings> {
-  const { [STORAGE_KEY]: s } = await chrome.storage.sync.get(STORAGE_KEY);
+  const { [STORAGE_KEY]: s } = await storage.sync.get(STORAGE_KEY);
   return { ...DEFAULT_SETTINGS, ...(s || {}) };
 }
 
@@ -45,7 +62,7 @@ function isBlockedUrl(url: string, blockedHosts: string[]): boolean {
 // Check if a domain is temporarily unblocked
 async function isTemporarilyUnblocked(domain: string): Promise<boolean> {
   try {
-    const { [TEMP_UNBLOCKS_KEY]: unblocks } = await chrome.storage.local.get(TEMP_UNBLOCKS_KEY);
+    const { [TEMP_UNBLOCKS_KEY]: unblocks } = await storage.local.get(TEMP_UNBLOCKS_KEY);
     if (!unblocks || !Array.isArray(unblocks)) return false;
     
     const normalizedDomain = normalizeDomain(domain);
@@ -65,7 +82,7 @@ async function isTemporarilyUnblocked(domain: string): Promise<boolean> {
 // Get all active temporary unblocks
 async function getActiveUnblocks(): Promise<TemporaryUnblock[]> {
   try {
-    const { [TEMP_UNBLOCKS_KEY]: unblocks } = await chrome.storage.local.get(TEMP_UNBLOCKS_KEY);
+    const { [TEMP_UNBLOCKS_KEY]: unblocks } = await storage.local.get(TEMP_UNBLOCKS_KEY);
     if (!unblocks || !Array.isArray(unblocks)) return [];
     
     const now = Date.now();
@@ -79,7 +96,7 @@ async function getActiveUnblocks(): Promise<TemporaryUnblock[]> {
 async function cleanupExpiredUnblocks() {
   try {
     const active = await getActiveUnblocks();
-    await chrome.storage.local.set({ [TEMP_UNBLOCKS_KEY]: active });
+    await storage.local.set({ [TEMP_UNBLOCKS_KEY]: active });
     debugLog('Cleaned up expired unblocks. Active unblocks:', active.length);
   } catch (error) {
     console.error('Error cleaning up unblocks:', error);
@@ -98,7 +115,7 @@ async function addTemporaryUnblock(domain: string, expiresAt: number) {
     // Add new unblock
     filtered.push({ domain: normalizedDomain, expiresAt });
     
-    await chrome.storage.local.set({ [TEMP_UNBLOCKS_KEY]: filtered });
+    await storage.local.set({ [TEMP_UNBLOCKS_KEY]: filtered });
     debugLog('Added temporary unblock:', domain, 'expires at:', new Date(expiresAt).toISOString());
   } catch (error) {
     console.error('Error adding temporary unblock:', error);
@@ -110,10 +127,10 @@ async function closeBlockedTabs(blockedHosts: string[]) {
   if (!blockedHosts || blockedHosts.length === 0) return;
   
   try {
-    const tabs = await chrome.tabs.query({});
+    const tabsList = await tabs.query({});
     const tabsToClose: number[] = [];
     
-    for (const tab of tabs) {
+    for (const tab of tabsList) {
       if (tab.url && isBlockedUrl(tab.url, blockedHosts)) {
         // Check if this domain is temporarily unblocked
         const isUnblocked = await isTemporarilyUnblocked(tab.url);
@@ -127,7 +144,7 @@ async function closeBlockedTabs(blockedHosts: string[]) {
     }
     
     if (tabsToClose.length > 0) {
-      await chrome.tabs.remove(tabsToClose);
+      await tabs.remove(tabsToClose);
       debugLog('Closed', tabsToClose.length, 'blocked tab(s)');
     }
   } catch (error) {
@@ -181,8 +198,8 @@ async function updateBlockingAndAlarm() {
 
     // Schedule the next boundary (start or end of a window)
     const next = nextBoundaryAfter(now, settings.windows);
-    await chrome.alarms.clear(ALARM_KEY);
-    await chrome.alarms.create(ALARM_KEY, { when: next.getTime() });
+    await alarms.clear(ALARM_KEY);
+    await alarms.create(ALARM_KEY, { when: next.getTime() });
     debugLog('Next boundary scheduled for:', new Date(next.getTime()).toISOString());
   } catch (error) {
     console.error('Error updating blocking and alarm:', error);
@@ -191,19 +208,42 @@ async function updateBlockingAndAlarm() {
 
 
 // Fired when the extension is installed or updated
-chrome.runtime.onInstalled.addListener(() => {
-  updateBlockingAndAlarm();
-  chrome.alarms.create(CLEANUP_UNBLOCKS_ALARM_KEY, { periodInMinutes: 1 });
-});
+if (runtime.onInstalled) {
+  runtime.onInstalled.addListener(() => {
+    try {
+      debugLog('Extension installed/updated');
+      updateBlockingAndAlarm().catch(error => {
+        console.error('Error in updateBlockingAndAlarm on install:', error);
+      });
+      alarms.create(CLEANUP_UNBLOCKS_ALARM_KEY, { periodInMinutes: 1 }).catch(error => {
+        console.error('Error creating cleanup alarm:', error);
+      });
+    } catch (error) {
+      console.error('Error in onInstalled listener:', error);
+    }
+  });
+}
 
 // Fired on startup
-chrome.runtime.onStartup.addListener(() => {
-  updateBlockingAndAlarm();
-  chrome.alarms.create(CLEANUP_UNBLOCKS_ALARM_KEY, { periodInMinutes: 1 });
-});
+if (runtime.onStartup) {
+  runtime.onStartup.addListener(() => {
+    try {
+      debugLog('Extension startup');
+      updateBlockingAndAlarm().catch(error => {
+        console.error('Error in updateBlockingAndAlarm on startup:', error);
+      });
+      alarms.create(CLEANUP_UNBLOCKS_ALARM_KEY, { periodInMinutes: 1 }).catch(error => {
+        console.error('Error creating cleanup alarm on startup:', error);
+      });
+    } catch (error) {
+      console.error('Error in onStartup listener:', error);
+    }
+  });
+}
 
 // Fired when alarms trigger
-chrome.alarms.onAlarm.addListener(async alarm => {
+if (alarms.onAlarm && 'addListener' in alarms.onAlarm) {
+  alarms.onAlarm.addListener(async (alarm: any) => {
   if (alarm.name === ALARM_KEY) {
     updateBlockingAndAlarm();
   } else if (alarm.name === CLEANUP_UNBLOCKS_ALARM_KEY) {
@@ -212,20 +252,24 @@ chrome.alarms.onAlarm.addListener(async alarm => {
     debugLog('Reroll reset timer expired, showing popup');
     await showCardPopupOnTabs();
     // Clear the stored reset time and reroll state
-    await chrome.storage.local.remove(REROLL_RESET_TIME_KEY);
-    await chrome.storage.local.remove('cardGambleRerollState');
+    await storage.local.remove(REROLL_RESET_TIME_KEY);
+    await storage.local.remove('cardGambleRerollState');
   }
-});
+  });
+}
 
 // If user changes settings in options UI, react immediately
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes[STORAGE_KEY]) {
-    updateBlockingAndAlarm();
-  }
-});
+if (storage.onChanged) {
+  storage.onChanged.addListener((changes: any, area: string) => {
+    if (area === "sync" && changes[STORAGE_KEY]) {
+      updateBlockingAndAlarm();
+    }
+  });
+}
 
 // Monitor tab updates to catch navigations to blocked sites (handles cache issues)
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+if (tabs.onUpdated) {
+  tabs.onUpdated.addListener(async (tabId: number, changeInfo: any, tab: any) => {
   // Only act when page is fully loaded
   if (changeInfo.status !== 'complete' || !tab.url) return;
   
@@ -241,7 +285,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
           debugLog('Blocked site detected in tab update:', tab.url);
           // Close the tab
           try {
-            await chrome.tabs.remove(tabId);
+            await tabs.remove(tabId);
             debugLog('Closed blocked tab:', tab.url);
           } catch (error) {
             // Tab might already be closed
@@ -255,20 +299,21 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   } catch (error) {
     console.error('Error in tab update listener:', error);
   }
-});
+  });
+}
 
 // Schedule reroll reset alarm
 async function scheduleRerollReset(resetTime: number) {
-  await chrome.alarms.clear(REROLL_RESET_ALARM_KEY);
-  await chrome.storage.local.set({ [REROLL_RESET_TIME_KEY]: resetTime });
-  await chrome.alarms.create(REROLL_RESET_ALARM_KEY, { when: resetTime });
+  await alarms.clear(REROLL_RESET_ALARM_KEY);
+  await storage.local.set({ [REROLL_RESET_TIME_KEY]: resetTime });
+  await alarms.create(REROLL_RESET_ALARM_KEY, { when: resetTime });
   debugLog('Scheduled reroll reset for:', new Date(resetTime).toISOString());
 }
 
 // Show card popup on all active tabs
 async function showCardPopupOnTabs() {
   try {
-    const tabs = await chrome.tabs.query({});
+    const tabsList = await tabs.query({});
     const settings = await getSettings();
     
     if (!settings.blockedHosts || settings.blockedHosts.length === 0) {
@@ -277,15 +322,18 @@ async function showCardPopupOnTabs() {
     }
 
     // Inject content script into all tabs
-    for (const tab of tabs) {
-      if (tab.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+    for (const tab of tabsList) {
+      const tabUrl = tab.url || '';
+      const isChromeUrl = tabUrl.startsWith('chrome://') || tabUrl.startsWith('chrome-extension://');
+      const isSafariUrl = tabUrl.startsWith('safari-extension://') || tabUrl.startsWith('safari-web-extension://');
+      if (tab.id && tabUrl && !isChromeUrl && !isSafariUrl) {
         try {
-          await chrome.scripting.executeScript({
+          await scripting.executeScript({
             target: { tabId: tab.id },
             files: ['content/cardPopup.js']
           });
           // Send message to show popup
-          await chrome.tabs.sendMessage(tab.id, { action: 'showCardPopup' });
+          await tabs.sendMessage(tab.id, { action: 'showCardPopup' });
         } catch (error) {
           debugLog('Could not inject script into tab:', tab.url, error);
         }
@@ -300,7 +348,7 @@ async function showCardPopupOnTabs() {
 // Clear all temporary unblocks
 async function clearAllTemporaryUnblocks() {
   try {
-    await chrome.storage.local.remove(TEMP_UNBLOCKS_KEY);
+    await storage.local.remove(TEMP_UNBLOCKS_KEY);
     debugLog('Cleared all temporary unblocks');
   } catch (error) {
     console.error('Error clearing temporary unblocks:', error);
@@ -317,7 +365,7 @@ async function removeTemporaryUnblock(domain: string) {
     // Remove the unblock for this domain
     const filtered = active.filter(u => normalizeDomain(u.domain) !== normalizedDomain);
     
-    await chrome.storage.local.set({ [TEMP_UNBLOCKS_KEY]: filtered });
+    await storage.local.set({ [TEMP_UNBLOCKS_KEY]: filtered });
     debugLog('Removed temporary unblock:', domain);
   } catch (error) {
     console.error('Error removing temporary unblock:', error);
@@ -326,7 +374,8 @@ async function removeTemporaryUnblock(domain: string) {
 }
 
 // Handle messages from options page (roulette wheel and card gamble)
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+if (runtime.onMessage) {
+  runtime.onMessage.addListener((message: any, sender: any, sendResponse: any) => {
   if (message.action === 'temporaryUnblock') {
     addTemporaryUnblock(message.domain, message.expiresAt).then(() => {
       sendResponse({ success: true });
@@ -345,8 +394,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   } else if (message.action === 'cancelRerollReset') {
-    chrome.alarms.clear(REROLL_RESET_ALARM_KEY).then(() => {
-      chrome.storage.local.remove(REROLL_RESET_TIME_KEY).then(() => {
+    alarms.clear(REROLL_RESET_ALARM_KEY).then(() => {
+      storage.local.remove(REROLL_RESET_TIME_KEY).then(() => {
         sendResponse({ success: true });
         debugLog('Reroll reset alarm canceled');
       });
@@ -380,16 +429,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
-});
+  });
+}
 
 // Handle extension icon click - open options page
-chrome.action.onClicked.addListener(async () => {
+if (action.onClicked) {
+  action.onClicked.addListener(async () => {
+    try {
+      await runtime.openOptionsPage();
+      debugLog('Opened options page');
+    } catch (error) {
+      console.error('Error opening options page:', error);
+    }
+  });
+  debugLog('Registered action.onClicked listener');
+} else {
+  // Fallback: try to access directly
   try {
-    await chrome.runtime.openOptionsPage();
-    debugLog('Opened options page');
+    const rawAction = (action as any)._raw;
+    if (rawAction?.onClicked) {
+      rawAction.onClicked.addListener(async () => {
+        try {
+          await runtime.openOptionsPage();
+          debugLog('Opened options page (via fallback)');
+        } catch (error) {
+          console.error('Error opening options page:', error);
+        }
+      });
+      debugLog('Registered action.onClicked listener (via fallback)');
+    } else {
+      console.warn('action.onClicked is not available - icon click will not open options page');
+    }
   } catch (error) {
-    console.error('Error opening options page:', error);
+    console.error('Error setting up action.onClicked listener:', error);
   }
-});
+}
 
 

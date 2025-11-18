@@ -1,4 +1,4 @@
-const r="productivity-blocker-card-popup";function s(){const o=document.getElementById(r);o&&o.remove();const e=document.createElement("div");e.id=r,e.style.cssText=`
+import{r as n}from"../assets/browser-api.js";const s="productivity-blocker-card-popup";function a(){const o=document.getElementById(s);o&&o.remove();const e=document.createElement("div");e.id=s,e.style.cssText=`
     position: fixed;
     top: 0;
     left: 0;
@@ -19,5 +19,5 @@ const r="productivity-blocker-card-popup";function s(){const o=document.getEleme
     border-radius: 12px;
     background: white;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  `;const n=chrome.runtime.getURL("cardPopup/index.html");t.src=n,e.appendChild(t),e.addEventListener("click",i=>{i.target===e&&e.remove()}),document.body.appendChild(e),window.addEventListener("message",i=>{i.data==="closeCardPopup"&&i.origin===chrome.runtime.getURL("").slice(0,-1)&&e.remove()})}chrome.runtime.onMessage.addListener((o,e,t)=>(o.action==="showCardPopup"&&(s(),t({success:!0})),!0));
+  `;const r=n.getURL("cardPopup/index.html");t.src=r,e.appendChild(t),e.addEventListener("click",i=>{i.target===e&&e.remove()}),document.body.appendChild(e),window.addEventListener("message",i=>{const d=n.getURL("").slice(0,-1);i.data==="closeCardPopup"&&i.origin===d&&e.remove()})}n.onMessage&&n.onMessage.addListener((o,e,t)=>(o.action==="showCardPopup"&&(a(),t({success:!0})),!0));
 //# sourceMappingURL=contentCardPopup.js.map

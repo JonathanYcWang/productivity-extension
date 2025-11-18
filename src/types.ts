@@ -25,7 +25,8 @@ export const DEFAULT_SETTINGS: Settings = {
     "facebook.com",
     "instagram.com",
     "youtube.com",
-    "twitter.com"
+    "twitter.com",
+    "primevideo.com"
   ],
   windows: [
     { day: 1, start: "09:00", end: "17:00" }, // Monday
@@ -41,7 +42,8 @@ export const DEFAULT_SETTINGS: Settings = {
     "facebook.com": [10],
     "instagram.com": [10],
     "youtube.com": [10],
-    "twitter.com": [10]
+    "twitter.com": [10],
+    "primevideo.com": [10]
   },
   rerollResetMinutes: 60
 };

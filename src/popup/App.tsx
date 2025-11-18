@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "../styles/common.css";
 import { Settings } from "../types";
+import { storage, runtime } from "../lib/browser-api";
 
 const STORAGE_KEY = "settings";
 
@@ -9,7 +10,7 @@ function Popup() {
   const [settings, setSettings] = React.useState<Settings | null>(null);
 
   React.useEffect(() => {
-    chrome.storage.sync.get(STORAGE_KEY).then(res => {
+    storage.sync.get(STORAGE_KEY).then(res => {
       setSettings(res[STORAGE_KEY]);
     });
   }, []);
@@ -17,7 +18,7 @@ function Popup() {
   const toggle = async () => {
     if (!settings) return;
     const next = { ...settings, enabled: !settings.enabled };
-    await chrome.storage.sync.set({ [STORAGE_KEY]: next });
+    await storage.sync.set({ [STORAGE_KEY]: next });
     setSettings(next);
   };
 
@@ -32,7 +33,7 @@ function Popup() {
       </button>
       <p style={{ marginTop: 12 }}>
         Configure sites & times in{" "}
-        <a href="#" onClick={() => chrome.runtime.openOptionsPage()}>Options</a>.
+        <a href="#" onClick={() => runtime.openOptionsPage()}>Options</a>.
       </p>
     </div>
   );

@@ -8,6 +8,7 @@ import { BlockedSitesSection } from "../components/BlockedSitesSection";
 import { TimeWindowsSection } from "../components/TimeWindowsSection";
 import { MasterSwitchSection } from "../components/MasterSwitchSection";
 import { ResetSection } from "../components/ResetSection";
+import { storage, runtime } from "../lib/browser-api";
 
 const STORAGE_KEY = "settings";
 
@@ -17,14 +18,14 @@ function Options() {
 
   React.useEffect(() => {
     (async () => {
-      const { [STORAGE_KEY]: s } = await chrome.storage.sync.get(STORAGE_KEY);
+      const { [STORAGE_KEY]: s } = await storage.sync.get(STORAGE_KEY);
       setSettings({ ...DEFAULT_SETTINGS, ...(s || {}) });
     })();
   }, []);
 
   const save = async (next: Settings) => {
     setSettings(next);
-    await chrome.storage.sync.set({ [STORAGE_KEY]: next });
+    await storage.sync.set({ [STORAGE_KEY]: next });
   };
 
   const resetToDefaults = async () => {
@@ -33,7 +34,7 @@ function Options() {
     setCardGambleResetKey(prev => prev + 1);
     // Clear all temporary unblocks
     try {
-      await chrome.runtime.sendMessage({ action: 'clearTemporaryUnblocks' });
+      await runtime.sendMessage({ action: 'clearTemporaryUnblocks' });
     } catch (error) {
       console.error('Error clearing temporary unblocks:', error);
     }
